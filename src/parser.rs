@@ -1,3 +1,6 @@
+// ToDo: Avoid reading all of the file into memory at once and use io::Read to minimise the memory
+// footprint (maybe even merging the parse_to_tokens and analyse steps together)
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Token {
     IncCell,

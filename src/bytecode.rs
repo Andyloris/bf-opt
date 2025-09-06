@@ -16,6 +16,54 @@ impl Instruction {
     }
 }
 
+pub fn analyse_mem_usage(instructions: &Vec<Instruction>) -> Option<usize> {
+    let mut res = 0;
+    // Stores the data pointer index change at the end of a loop iteration and the maximum reached mem usage
+    let mut loop_info: Vec<Option<(usize, usize)>> = Vec::new();
+    let mut cur_nesting_level = 0;
+    for &inst in instructions {
+        match inst {
+            Instruction::LoopEntry(_, _) => {
+                cur_nesting_level += 1;
+                if loop_info.len() <= cur_nesting_level {
+                    loop_info.push(None)
+                }
+                loop_info[cur_nesting_level - 1] = Some((0, 0))
+            }
+
+            Instruction::LoopEnd(_, _) => {
+                match loop_info[cur_nesting_level - 1] {
+                    Some((change, max_idx)) => {
+                        if change != 0 {
+                            return None;
+                        } else {
+                            res += max_idx;
+                        }
+                    }
+                    None => unreachable!(),
+                }
+                loop_info[cur_nesting_level - 1] = None;
+                cur_nesting_level -= 1;
+            }
+
+            Instruction::IncIdx(inc) => {
+                if cur_nesting_level != 0 {
+                    if let Some(cur_loop_info) = &mut loop_info[cur_nesting_level - 1] {
+                        cur_loop_info.0 = cur_loop_info.0.wrapping_add_signed(inc);
+                        cur_loop_info.1 += inc.max(0) as usize;
+                        continue;
+                    }
+                }
+                res += inc.max(0) as usize;
+            }
+
+            _ => {}
+        };
+    }
+
+    Some(res + 1)
+}
+
 fn delete_extraneous_instructions(instructions: Vec<Instruction>) -> (Vec<Instruction>, bool) {
     let mut res = Vec::new();
     let mut org_indices_to_new = Vec::new();
@@ -26,7 +74,10 @@ fn delete_extraneous_instructions(instructions: Vec<Instruction>) -> (Vec<Instru
         match (last_inst, inst) {
             (_, Instruction::IncIdx(0)) => is_changed = true,
             (_, Instruction::IncCell(0)) => is_changed = true,
-            (Some(Instruction::LoopEntry(_, _)), Instruction::LoopEnd(_, _)) => is_changed = true,
+            (Some(Instruction::LoopEntry(_, _)), Instruction::LoopEnd(_, _)) => {
+                res.pop();
+                is_changed = true
+            }
             _ => {
                 last_inst = Some(inst);
                 res.push(inst)

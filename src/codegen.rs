@@ -3,9 +3,49 @@ use crate::bytecode::Instruction;
 use llvm::prelude::*;
 use llvm_sys as llvm;
 use std::{
-    ffi::{CStr, c_char},
+    ffi::{CStr, CString, c_char},
+    mem::ManuallyDrop,
     ptr,
+    str::FromStr,
 };
+
+static OPTLevelStrings: [&CStr; 6] = [
+    c"default<O0>",
+    c"default<O1>",
+    c"default<O2>",
+    c"default<O3>",
+    c"default<Os>",
+    c"default<Oz>",
+];
+
+#[derive(Clone, Copy)]
+pub enum OptimizationLevel {
+    O0,
+    O1,
+    O2,
+    O3,
+    Os,
+    Oz,
+}
+
+impl OptimizationLevel {
+    pub fn as_index(self) -> usize {
+        match self {
+            Self::O0 => 0,
+            Self::O1 => 1,
+            Self::O2 => 2,
+            Self::O3 => 3,
+            Self::Os => 4,
+            Self::Oz => 5,
+        }
+    }
+}
+
+pub enum OutputFileType {
+    IR,
+    Assembly,
+    ObjectFile,
+}
 
 pub fn gen_ir(
     insts: Vec<Instruction>,
@@ -13,6 +53,9 @@ pub fn gen_ir(
     target_triple: &CStr,
     cpu: &CStr,
     features: &CStr,
+    out_file: String,
+    outtype: OutputFileType,
+    opt_level: OptimizationLevel,
 ) {
     unsafe {
         let module = llvm::core::LLVMModuleCreateWithName(c"OverengineeredBF".as_ptr() as *const _);
@@ -78,121 +121,76 @@ pub fn gen_ir(
             llvm::core::LLVMAddFunction(module, c"putchar".as_ptr() as *const _, putchar_type);
         llvm::core::LLVMSetLinkage(putchar_fn, llvm::LLVMLinkage::LLVMExternalLinkage);
 
+        let empty_name = c"".as_ptr() as *const _;
         // Declare the cell array
         let cell_type = llvm::core::LLVMInt8TypeInContext(context);
         let cell_zero = llvm::core::LLVMConstInt(cell_type, 0, 1);
         let alloc_size = llvm::core::LLVMConstInt(size_t_type, num_cells as u64, 1);
-        let bfarray = llvm::core::LLVMBuildArrayMalloc(
-            builder,
-            cell_type,
-            alloc_size,
-            c"bfarray".as_ptr() as *const _,
-        );
+        let bfarray = llvm::core::LLVMBuildArrayMalloc(builder, cell_type, alloc_size, empty_name);
         llvm::core::LLVMBuildMemSet(builder, bfarray, cell_zero, alloc_size, 1);
 
         // Declare the data pointer
-        let data_ptr_val =
-            llvm::core::LLVMBuildAlloca(builder, int, c"bfdataidx".as_ptr() as *const _);
+        let data_ptr_val = llvm::core::LLVMBuildAlloca(builder, int, empty_name);
         llvm::core::LLVMBuildStore(builder, llvm::core::LLVMConstInt(int, 0, 1), data_ptr_val);
         let mut loop_labels: Vec<Option<(LLVMBasicBlockRef, LLVMBasicBlockRef)>> = Vec::new();
         let mut nesting_level = 0;
         for inst in insts {
             match inst {
                 Instruction::IncCell(val) => {
-                    let mut tmp = llvm::core::LLVMBuildLoad2(
-                        builder,
-                        int,
-                        data_ptr_val,
-                        c"bfdataptrval".as_ptr() as *const _,
-                    );
+                    let mut tmp =
+                        llvm::core::LLVMBuildLoad2(builder, int, data_ptr_val, empty_name);
                     let elem_ptr = llvm::core::LLVMBuildInBoundsGEP2(
                         builder,
                         cell_type,
                         bfarray,
                         &mut tmp as *mut _,
                         1,
-                        c"bfelemptr".as_ptr() as *const _,
+                        empty_name,
                     );
-                    let elem_val = llvm::core::LLVMBuildLoad2(
-                        builder,
-                        cell_type,
-                        elem_ptr,
-                        c"bfcellval".as_ptr() as *const _,
-                    );
+                    let elem_val =
+                        llvm::core::LLVMBuildLoad2(builder, cell_type, elem_ptr, empty_name);
                     let val = llvm::core::LLVMConstInt(cell_type, (val % 256) as u64, 1);
-                    let add = llvm::core::LLVMBuildAdd(
-                        builder,
-                        elem_val,
-                        val,
-                        c"bfcelladdress".as_ptr() as *const _,
-                    );
+                    let add = llvm::core::LLVMBuildAdd(builder, elem_val, val, empty_name);
                     let _ = llvm::core::LLVMBuildStore(builder, add, elem_ptr);
                 }
 
                 Instruction::IncIdx(val) => {
                     let off = llvm::core::LLVMConstInt(int, val as u64, 1);
-                    let tmp = llvm::core::LLVMBuildLoad2(
-                        builder,
-                        int,
-                        data_ptr_val,
-                        c"bftmpdataidx".as_ptr() as *const _,
-                    );
-                    let add = llvm::core::LLVMBuildAdd(
-                        builder,
-                        tmp,
-                        off,
-                        c"bftmp2dataidx".as_ptr() as *const _,
-                    );
+                    let tmp = llvm::core::LLVMBuildLoad2(builder, int, data_ptr_val, empty_name);
+                    let add = llvm::core::LLVMBuildAdd(builder, tmp, off, empty_name);
                     llvm::core::LLVMBuildStore(builder, add, data_ptr_val);
                 }
 
                 Instruction::LoopEntry(_, _) => {
-                    let loop_test = llvm::core::LLVMAppendBasicBlockInContext(
-                        context,
-                        mainfn,
-                        c"".as_ptr() as *const _,
-                    );
+                    let loop_test =
+                        llvm::core::LLVMAppendBasicBlockInContext(context, mainfn, empty_name);
 
-                    let loop_code = llvm::core::LLVMAppendBasicBlockInContext(
-                        context,
-                        mainfn,
-                        c"loop_code".as_ptr() as *const _,
-                    );
+                    let loop_code =
+                        llvm::core::LLVMAppendBasicBlockInContext(context, mainfn, empty_name);
 
-                    let loop_end = llvm::core::LLVMAppendBasicBlockInContext(
-                        context,
-                        mainfn,
-                        c"loop_end".as_ptr() as *const _,
-                    );
+                    let loop_end =
+                        llvm::core::LLVMAppendBasicBlockInContext(context, mainfn, empty_name);
 
                     llvm::core::LLVMBuildBr(builder, loop_test);
                     llvm::core::LLVMPositionBuilderAtEnd(builder, loop_test);
-                    let mut tmp = llvm::core::LLVMBuildLoad2(
-                        builder,
-                        int,
-                        data_ptr_val,
-                        c"bfdataptrval".as_ptr() as *const _,
-                    );
+                    let mut tmp =
+                        llvm::core::LLVMBuildLoad2(builder, int, data_ptr_val, empty_name);
                     let elem_ptr = llvm::core::LLVMBuildInBoundsGEP2(
                         builder,
                         cell_type,
                         bfarray,
                         &mut tmp as *mut _,
                         1,
-                        c"bfelemptr".as_ptr() as *const _,
+                        empty_name,
                     );
-                    let elem_val = llvm::core::LLVMBuildLoad2(
-                        builder,
-                        cell_type,
-                        elem_ptr,
-                        c"bfcellval".as_ptr() as *const _,
-                    );
+                    let elem_val =
+                        llvm::core::LLVMBuildLoad2(builder, cell_type, elem_ptr, empty_name);
                     let cond = llvm::core::LLVMBuildICmp(
                         builder,
                         llvm::LLVMIntPredicate::LLVMIntEQ,
                         cell_zero,
                         elem_val,
-                        c"loop_entry_cmp".as_ptr() as *const _,
+                        empty_name,
                     );
                     llvm::core::LLVMBuildCondBr(builder, cond, loop_end, loop_code);
                     llvm::core::LLVMPositionBuilderAtEnd(builder, loop_code);
@@ -212,33 +210,25 @@ pub fn gen_ir(
                 }
 
                 Instruction::Put => {
-                    let mut tmp = llvm::core::LLVMBuildLoad2(
-                        builder,
-                        int,
-                        data_ptr_val,
-                        c"bfdataptrval".as_ptr() as *const _,
-                    );
+                    let mut tmp =
+                        llvm::core::LLVMBuildLoad2(builder, int, data_ptr_val, empty_name);
                     let elem_ptr = llvm::core::LLVMBuildInBoundsGEP2(
                         builder,
                         cell_type,
                         bfarray,
                         &mut tmp as *mut _,
                         1,
-                        c"bfelemptr".as_ptr() as *const _,
+                        empty_name,
                     );
-                    let mut elem_val = llvm::core::LLVMBuildLoad2(
-                        builder,
-                        cell_type,
-                        elem_ptr,
-                        c"bfcellval".as_ptr() as *const _,
-                    );
+                    let mut elem_val =
+                        llvm::core::LLVMBuildLoad2(builder, cell_type, elem_ptr, empty_name);
                     llvm::core::LLVMBuildCall2(
                         builder,
                         putchar_type,
                         putchar_fn,
                         &mut elem_val as *mut _,
                         1,
-                        c"".as_ptr() as *const _,
+                        empty_name,
                     );
                 }
 
@@ -250,25 +240,45 @@ pub fn gen_ir(
 
         llvm::transforms::pass_builder::LLVMRunPasses(
             module,
-            c"default<O3>".as_ptr() as *const _,
+            OPTLevelStrings[opt_level.as_index()].as_ptr() as *const _,
             target_machine,
             pass_builder_opts,
         );
 
-        llvm::target_machine::LLVMTargetMachineEmitToFile(
-            target_machine,
-            module,
-            c"out.o".as_ptr() as *const _,
-            llvm::target_machine::LLVMCodeGenFileType::LLVMObjectFile,
-            &mut err_msg as *mut _,
-        );
-        llvm::core::LLVMPrintModuleToFile(
-            module,
-            c"out.ll".as_ptr() as *const _,
-            &mut err_msg as *mut _,
-        );
-        //let s = CStr::from_ptr(err_msg.cast_const());
-        //println!("{}", s.to_str().unwrap());
+        let file_name: ManuallyDrop<CString> =
+            ManuallyDrop::new(CString::from_str(&out_file).expect("Invalid file name"));
+
+        match outtype {
+            OutputFileType::IR => {
+                llvm::core::LLVMPrintModuleToFile(
+                    module,
+                    file_name.as_ptr() as *const _,
+                    &mut err_msg as *mut _,
+                );
+            }
+
+            OutputFileType::Assembly => {
+                llvm::target_machine::LLVMTargetMachineEmitToFile(
+                    target_machine,
+                    module,
+                    file_name.as_ptr() as *const _,
+                    llvm::target_machine::LLVMCodeGenFileType::LLVMAssemblyFile,
+                    &mut err_msg as *mut _,
+                );
+            }
+
+            OutputFileType::ObjectFile => {
+                llvm::target_machine::LLVMTargetMachineEmitToFile(
+                    target_machine,
+                    module,
+                    file_name.as_ptr() as *const _,
+                    llvm::target_machine::LLVMCodeGenFileType::LLVMObjectFile,
+                    &mut err_msg as *mut _,
+                );
+            }
+        }
+
+        drop(ManuallyDrop::into_inner(file_name));
         llvm::core::LLVMDisposeBuilder(builder);
         llvm::core::LLVMDisposeModule(module);
         llvm::core::LLVMContextDispose(context);
