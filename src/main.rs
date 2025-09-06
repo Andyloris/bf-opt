@@ -1,3 +1,4 @@
+#![allow(unsafe_op_in_unsafe_fn)]
 mod bytecode;
 mod codegen;
 mod interpreter;
@@ -6,7 +7,7 @@ mod parser;
 use clap::{Parser, Subcommand, arg};
 use std::fs;
 
-use crate::codegen::{OptimizationLevel, OutputFileType};
+use crate::codegen::{CodeGenData, OptimizationLevel, OutputFileType, TargetInfo};
 
 #[derive(Parser, Debug)]
 struct Args {
@@ -51,13 +52,13 @@ fn main() {
     let insts = bytecode::analyse(tokens.as_slice()).unwrap();
     let mem_usage = bytecode::analyse_mem_usage(&insts).unwrap_or(args.max_cells);
 
-    let mut outfile_type = OutputFileType::ObjectFile;
+    let mut out_type = OutputFileType::ObjectFile;
     if args.emit_llvm {
-        outfile_type = OutputFileType::IR;
+        out_type = OutputFileType::IR;
     }
 
     if args.emit_asm {
-        outfile_type = OutputFileType::Assembly;
+        out_type = OutputFileType::Assembly;
     }
 
     // Uber spaghetti code
@@ -113,14 +114,26 @@ fn main() {
         _ => OptimizationLevel::O0,
     };
 
-    codegen::gen_ir(
-        insts.clone(),
-        mem_usage,
-        c"x86_64-pc-linux-gnu",
-        c"generic",
-        c"",
-        args.output.unwrap(),
-        outfile_type,
-        opt_level,
-    );
+    let codegen_data = CodeGenData::new(
+        &args.file,
+        TargetInfo {
+            target_triple: "x86_64-pc-linux-gnu",
+            cpu: "generic",
+            features: "",
+        },
+    )
+    .expect("Failed to create codegen_data");
+    println!("Gen ir");
+    codegen_data.gen_ir(mem_usage, insts.clone());
+    println!("Passes");
+    codegen_data.run_passes(opt_level);
+    println!("Code output");
+    codegen_data.output_code(codegen::OutInfo {
+        out_file: args.output.unwrap_or(match out_type {
+            OutputFileType::IR => String::from("out.ll"),
+            OutputFileType::Assembly => String::from("out.S"),
+            OutputFileType::ObjectFile => String::from("out.o"),
+        }),
+        out_type,
+    });
 }

@@ -47,12 +47,12 @@ pub fn analyse_mem_usage(instructions: &Vec<Instruction>) -> Option<usize> {
             }
 
             Instruction::IncIdx(inc) => {
-                if cur_nesting_level != 0 {
-                    if let Some(cur_loop_info) = &mut loop_info[cur_nesting_level - 1] {
-                        cur_loop_info.0 = cur_loop_info.0.wrapping_add_signed(inc);
-                        cur_loop_info.1 += inc.max(0) as usize;
-                        continue;
-                    }
+                if let Some(Some(cur_loop_info)) =
+                    loop_info.get_mut(cur_nesting_level.saturating_sub(1))
+                {
+                    cur_loop_info.0 = cur_loop_info.0.wrapping_add_signed(inc);
+                    cur_loop_info.1 += inc.max(0) as usize;
+                    continue;
                 }
                 res += inc.max(0) as usize;
             }
