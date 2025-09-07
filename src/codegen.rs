@@ -2,7 +2,7 @@ use crate::bytecode::Instruction;
 
 use llvm::prelude::*;
 use llvm_sys::{
-    self as llvm, target_machine::LLVMTargetMachineRef,
+    self as llvm, target::LLVMTargetDataRef, target_machine::LLVMTargetMachineRef,
     transforms::pass_builder::LLVMPassBuilderOptionsRef,
 };
 use std::{
@@ -57,12 +57,6 @@ pub struct TargetInfo<'a> {
     pub features: &'a str,
 }
 
-struct CTargetInfo {
-    pub target_triple: *mut c_char,
-    pub cpu: *mut c_char,
-    pub features: *mut c_char,
-}
-
 pub struct OutInfo {
     pub out_file: String,
     pub out_type: OutputFileType,
@@ -74,7 +68,7 @@ pub struct CodeGenData {
     builder: LLVMBuilderRef,
     target_machine: LLVMTargetMachineRef,
     pass_builder_opts: LLVMPassBuilderOptionsRef,
-    c_target_info: CTargetInfo,
+    data_layout: LLVMTargetDataRef,
 }
 
 static LLVM_IS_INIT: Mutex<bool> = Mutex::new(false);
@@ -100,8 +94,9 @@ impl CodeGenData {
         result
     }
 
-    unsafe fn gen_cstring_from_str(str: &str) -> ManuallyDrop<CString> {
-        ManuallyDrop::new(CString::from_str(str).unwrap())
+    // LLVM Seems to copy the strings that it gets, so be careful when using this
+    unsafe fn gen_cstring_from_str(str: &str) -> CString {
+        CString::from_str(str).unwrap()
     }
 
     unsafe fn new_impl(module_name: &str, target_info: TargetInfo) -> Option<Self> {
@@ -141,6 +136,7 @@ impl CodeGenData {
         );
 
         let pass_builder_opts = llvm::transforms::pass_builder::LLVMCreatePassBuilderOptions();
+        let data_layout = llvm::target_machine::LLVMCreateTargetDataLayout(target_machine);
 
         Some(Self {
             module,
@@ -148,11 +144,7 @@ impl CodeGenData {
             builder,
             target_machine,
             pass_builder_opts,
-            c_target_info: CTargetInfo {
-                target_triple: target_triple.as_ptr().cast_mut(),
-                cpu: target_triple.as_ptr().cast_mut(),
-                features: target_triple.as_ptr().cast_mut(),
-            },
+            data_layout,
         })
     }
 
@@ -161,10 +153,8 @@ impl CodeGenData {
     }
 
     pub unsafe fn gen_ir_impl(&self, num_cells: usize, insts: Vec<Instruction>) {
-        let dl = llvm::target_machine::LLVMCreateTargetDataLayout(self.target_machine);
-
         // Types
-        let pointer_size_bits = llvm::target::LLVMPointerSize(dl) * 8;
+        let pointer_size_bits = llvm::target::LLVMPointerSize(self.data_layout) * 8;
         let size_t_type = llvm::core::LLVMIntTypeInContext(self.context, pointer_size_bits);
         let mut int_type = llvm::core::LLVMInt32TypeInContext(self.context);
         let cell_type = llvm::core::LLVMInt8TypeInContext(self.context);
@@ -394,7 +384,6 @@ impl CodeGenData {
                     err_msg,
                 ),
             };
-            drop(ManuallyDrop::into_inner(file_name));
             r
         }
     }
@@ -409,8 +398,7 @@ impl Drop for CodeGenData {
                 builder,
                 target_machine,
                 pass_builder_opts,
-                // This seems to be useless
-                c_target_info: _,
+                data_layout,
             } = *self;
 
             llvm::core::LLVMDisposeBuilder(builder);
@@ -418,6 +406,7 @@ impl Drop for CodeGenData {
             llvm::core::LLVMContextDispose(context);
             llvm::target_machine::LLVMDisposeTargetMachine(target_machine);
             llvm::transforms::pass_builder::LLVMDisposePassBuilderOptions(pass_builder_opts);
+            llvm::target::LLVMDisposeTargetData(data_layout);
         }
     }
 }
