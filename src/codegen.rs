@@ -159,6 +159,7 @@ impl CodeGenData {
         let mut int_type = llvm::core::LLVMInt32TypeInContext(self.context);
         let cell_type = llvm::core::LLVMInt8TypeInContext(self.context);
 
+        let getchar_type = llvm::core::LLVMFunctionType(int_type, ptr::null_mut(), 0, 0);
         let putchar_type = llvm::core::LLVMFunctionType(int_type, &mut int_type as *mut _, 1, 0);
         let mainfn_type = llvm::core::LLVMFunctionType(int_type, ptr::null_mut(), 0, 0);
 
@@ -169,9 +170,12 @@ impl CodeGenData {
         let int_zero = llvm::core::LLVMConstInt(int_type, 0, 1);
 
         // Functions
+        let getchar_fn =
+            llvm::core::LLVMAddFunction(self.module, c"getchar".as_ptr() as *const _, getchar_type);
         let putchar_fn =
             llvm::core::LLVMAddFunction(self.module, c"putchar".as_ptr() as *const _, putchar_type);
         llvm::core::LLVMSetLinkage(putchar_fn, llvm::LLVMLinkage::LLVMExternalLinkage);
+        llvm::core::LLVMSetLinkage(getchar_fn, llvm::LLVMLinkage::LLVMExternalLinkage);
         let main_fn =
             llvm::core::LLVMAddFunction(self.module, c"main".as_ptr() as *const _, mainfn_type);
 
@@ -324,7 +328,33 @@ impl CodeGenData {
                     );
                 }
 
-                _ => {}
+                Instruction::Input => {
+                    // ToDo: Remove this tmp
+                    let mut tmp = llvm::core::LLVMBuildLoad2(
+                        self.builder,
+                        int_type,
+                        data_ptr_val,
+                        empty_name,
+                    );
+                    let elem_ptr = llvm::core::LLVMBuildInBoundsGEP2(
+                        self.builder,
+                        cell_type,
+                        bfarray,
+                        &mut tmp as *mut _,
+                        1,
+                        empty_name,
+                    );
+                    let char = llvm::core::LLVMBuildCall2(
+                        self.builder,
+                        getchar_type,
+                        getchar_fn,
+                        ptr::null_mut(),
+                        0,
+                        empty_name,
+                    );
+
+                    let _ = llvm::core::LLVMBuildStore(self.builder, char, elem_ptr);
+                }
             };
         }
 
