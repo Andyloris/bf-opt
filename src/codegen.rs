@@ -157,6 +157,7 @@ impl CodeGenData {
         let pointer_size_bits = llvm::target::LLVMPointerSize(self.data_layout) * 8;
         let size_t_type = llvm::core::LLVMIntTypeInContext(self.context, pointer_size_bits);
         let mut int_type = llvm::core::LLVMInt32TypeInContext(self.context);
+        let cell_ptr_type = llvm::core::LLVMPointerTypeInContext(self.context, 0);
         let cell_type = llvm::core::LLVMInt8TypeInContext(self.context);
 
         let getchar_type = llvm::core::LLVMFunctionType(int_type, ptr::null_mut(), 0, 0);
@@ -192,11 +193,13 @@ impl CodeGenData {
             llvm::core::LLVMBuildArrayMalloc(self.builder, cell_type, alloc_size, empty_name);
         // Zero the cell array
         llvm::core::LLVMBuildMemSet(self.builder, bfarray, cell_zero, alloc_size, 1);
+        let elem_ptr = llvm::core::LLVMBuildAlloca(self.builder, cell_ptr_type, empty_name);
+        llvm::core::LLVMBuildStore(self.builder, bfarray, elem_ptr);
 
         // Declare the data pointer
-        let data_ptr_val = llvm::core::LLVMBuildAlloca(self.builder, int_type, empty_name);
+        //let data_ptr_val = llvm::core::LLVMBuildAlloca(self.builder, int_type, empty_name);
         // Set the data pointer to the start of the cell array
-        llvm::core::LLVMBuildStore(self.builder, int_zero, data_ptr_val);
+        //llvm::core::LLVMBuildStore(self.builder, int_zero, data_ptr_val);
 
         let mut loop_labels: Vec<Option<(LLVMBasicBlockRef, LLVMBasicBlockRef)>> = Vec::new();
         let mut nesting_level = 0;
@@ -204,38 +207,36 @@ impl CodeGenData {
         for inst in insts {
             match inst {
                 Instruction::IncCell(val) => {
-                    // ToDo: Remove this tmp
-                    let mut tmp = llvm::core::LLVMBuildLoad2(
+                    let tmp = llvm::core::LLVMBuildLoad2(
                         self.builder,
-                        int_type,
-                        data_ptr_val,
-                        empty_name,
-                    );
-                    let elem_ptr = llvm::core::LLVMBuildInBoundsGEP2(
-                        self.builder,
-                        cell_type,
-                        bfarray,
-                        &mut tmp as *mut _,
-                        1,
+                        cell_ptr_type,
+                        elem_ptr,
                         empty_name,
                     );
                     let elem_val =
-                        llvm::core::LLVMBuildLoad2(self.builder, cell_type, elem_ptr, empty_name);
+                        llvm::core::LLVMBuildLoad2(self.builder, cell_type, tmp, empty_name);
                     let val = llvm::core::LLVMConstInt(cell_type, (val % 256) as u64, 1);
                     let add = llvm::core::LLVMBuildAdd(self.builder, elem_val, val, empty_name);
-                    let _ = llvm::core::LLVMBuildStore(self.builder, add, elem_ptr);
+                    let _ = llvm::core::LLVMBuildStore(self.builder, add, tmp);
                 }
 
                 Instruction::IncIdx(val) => {
-                    let off = llvm::core::LLVMConstInt(int_type, val as u64, 1);
-                    let tmp = llvm::core::LLVMBuildLoad2(
+                    let mut off = llvm::core::LLVMConstInt(int_type, val as u64, 1);
+                    let tmp_ptr = llvm::core::LLVMBuildLoad2(
                         self.builder,
-                        int_type,
-                        data_ptr_val,
+                        cell_ptr_type,
+                        elem_ptr,
                         empty_name,
                     );
-                    let add = llvm::core::LLVMBuildAdd(self.builder, tmp, off, empty_name);
-                    llvm::core::LLVMBuildStore(self.builder, add, data_ptr_val);
+                    let tmp_new_ptr = llvm::core::LLVMBuildInBoundsGEP2(
+                        self.builder,
+                        cell_type,
+                        tmp_ptr,
+                        &mut off as *mut _,
+                        1,
+                        empty_name,
+                    );
+                    llvm::core::LLVMBuildStore(self.builder, tmp_new_ptr, elem_ptr);
                 }
 
                 Instruction::LoopEntry(_, _) => {
@@ -260,23 +261,14 @@ impl CodeGenData {
                     llvm::core::LLVMBuildBr(self.builder, loop_test);
                     llvm::core::LLVMPositionBuilderAtEnd(self.builder, loop_test);
 
-                    // ToDo: Remove this tmp
-                    let mut tmp = llvm::core::LLVMBuildLoad2(
+                    let tmp = llvm::core::LLVMBuildLoad2(
                         self.builder,
-                        int_type,
-                        data_ptr_val,
-                        empty_name,
-                    );
-                    let elem_ptr = llvm::core::LLVMBuildInBoundsGEP2(
-                        self.builder,
-                        cell_type,
-                        bfarray,
-                        &mut tmp as *mut _,
-                        1,
+                        cell_ptr_type,
+                        elem_ptr,
                         empty_name,
                     );
                     let elem_val =
-                        llvm::core::LLVMBuildLoad2(self.builder, cell_type, elem_ptr, empty_name);
+                        llvm::core::LLVMBuildLoad2(self.builder, cell_type, tmp, empty_name);
                     let cond = llvm::core::LLVMBuildICmp(
                         self.builder,
                         llvm::LLVMIntPredicate::LLVMIntEQ,
@@ -302,22 +294,14 @@ impl CodeGenData {
                 }
 
                 Instruction::Put => {
-                    let mut tmp = llvm::core::LLVMBuildLoad2(
+                    let tmp = llvm::core::LLVMBuildLoad2(
                         self.builder,
-                        int_type,
-                        data_ptr_val,
-                        empty_name,
-                    );
-                    let elem_ptr = llvm::core::LLVMBuildInBoundsGEP2(
-                        self.builder,
-                        cell_type,
-                        bfarray,
-                        &mut tmp as *mut _,
-                        1,
+                        cell_ptr_type,
+                        elem_ptr,
                         empty_name,
                     );
                     let mut elem_val =
-                        llvm::core::LLVMBuildLoad2(self.builder, cell_type, elem_ptr, empty_name);
+                        llvm::core::LLVMBuildLoad2(self.builder, cell_type, tmp, empty_name);
                     llvm::core::LLVMBuildCall2(
                         self.builder,
                         putchar_type,
@@ -329,21 +313,6 @@ impl CodeGenData {
                 }
 
                 Instruction::Input => {
-                    // ToDo: Remove this tmp
-                    let mut tmp = llvm::core::LLVMBuildLoad2(
-                        self.builder,
-                        int_type,
-                        data_ptr_val,
-                        empty_name,
-                    );
-                    let elem_ptr = llvm::core::LLVMBuildInBoundsGEP2(
-                        self.builder,
-                        cell_type,
-                        bfarray,
-                        &mut tmp as *mut _,
-                        1,
-                        empty_name,
-                    );
                     let char = llvm::core::LLVMBuildCall2(
                         self.builder,
                         getchar_type,
@@ -353,7 +322,13 @@ impl CodeGenData {
                         empty_name,
                     );
 
-                    let _ = llvm::core::LLVMBuildStore(self.builder, char, elem_ptr);
+                    let tmp = llvm::core::LLVMBuildLoad2(
+                        self.builder,
+                        cell_ptr_type,
+                        elem_ptr,
+                        empty_name,
+                    );
+                    let _ = llvm::core::LLVMBuildStore(self.builder, char, tmp);
                 }
             };
         }
