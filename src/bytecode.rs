@@ -65,22 +65,18 @@ pub fn analyse_mem_usage(instructions: &Vec<Instruction>) -> Option<usize> {
 }
 
 fn delete_extraneous_instructions(instructions: Vec<Instruction>) -> (Vec<Instruction>, bool) {
-    let mut res = Vec::new();
+    let mut res: Vec<Instruction> = Vec::new();
     let mut org_indices_to_new = Vec::new();
     let mut is_changed = false;
     let mut last_inst = None;
-    for inst in instructions {
+    for inst in &instructions {
         org_indices_to_new.push(res.len());
         match (last_inst, inst) {
             (_, Instruction::IncIdx(0)) => is_changed = true,
             (_, Instruction::IncCell(0)) => is_changed = true,
-            (Some(Instruction::LoopEntry(_, _)), Instruction::LoopEnd(_, _)) => {
-                res.pop();
-                is_changed = true
-            }
             _ => {
-                last_inst = Some(inst);
-                res.push(inst)
+                last_inst = Some(*inst);
+                res.push(*inst)
             }
         };
     }
@@ -127,8 +123,10 @@ fn remove_extra_loops(instructions: Vec<Instruction>) -> (Vec<Instruction>, bool
 
         match inst {
             Instruction::LoopEntry(start, end) => {
-                cur_omitted_loop_bounds = Some((start, end));
-                is_changed = true;
+                if cur_omitted_loop_bounds.is_none() {
+                    cur_omitted_loop_bounds = Some((start, end));
+                    is_changed = true;
+                }
             }
             _ => {
                 if let Some((_, end)) = cur_omitted_loop_bounds {
