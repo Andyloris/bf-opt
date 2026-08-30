@@ -4,7 +4,7 @@ mod codegen;
 mod interpreter;
 mod parser;
 
-use clap::{Parser, Subcommand, arg};
+use clap::{Parser, Subcommand};
 use std::fs;
 
 use crate::codegen::{CodeGenData, OptimizationLevel, OutputFileType, TargetInfo};
@@ -123,11 +123,8 @@ fn main() {
         },
     )
     .expect("Failed to create codegen_data");
-    println!("Gen ir");
     codegen_data.gen_ir(mem_usage, insts.clone());
-    println!("Passes");
     codegen_data.run_passes(opt_level);
-    println!("Code output");
     codegen_data.output_code(codegen::OutInfo {
         out_file: args.output.unwrap_or(match out_type {
             OutputFileType::IR => String::from("out.ll"),

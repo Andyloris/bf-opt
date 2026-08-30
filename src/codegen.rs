@@ -357,7 +357,7 @@ impl CodeGenData {
         unsafe {
             let mut err_msg: *mut c_char = ptr::null_mut();
             let file_name = Self::gen_cstring_from_str(&out_info.out_file);
-            let r = match out_info.out_type {
+            match out_info.out_type {
                 OutputFileType::IR => Self::llvm_err_assert(
                     llvm::core::LLVMPrintModuleToFile(
                         self.module,
@@ -388,8 +388,7 @@ impl CodeGenData {
                     ),
                     err_msg,
                 ),
-            };
-            r
+            }
         }
     }
 }
