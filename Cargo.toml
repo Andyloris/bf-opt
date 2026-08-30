@@ -1,5 +1,5 @@
 [package]
-name = "optimizing-brainfuck-compiler"
+name = "bf-opt"
 version = "0.1.0"
 edition = "2024"
 
